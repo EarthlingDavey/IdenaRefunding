@@ -1,7 +1,8 @@
 // make sure the capital is capital  and nonce will be zero if the address wasn't used before ...and epoch
 var address = '0xa6A5B8BDd503401037410080C8C064F7aAbB5BF0';
 const util = require('util');
-const request = require('request');
+// const request = require('request');
+const fetch = require('node-fetch');
 const RLP = require('rlp');
 const ethers = require('ethers');
 const { SigningKey } = require('ethers/utils/signing-key');
@@ -9,6 +10,20 @@ const privateKey =
   'de196a5bffc5554d8a739bb9f8d7a0cc8c3a18cb903d6d0c99a50c5687924900';
 var currnonce = 0;
 var epoch = 42;
+
+/**
+ * Helper function to fetch a url
+ */
+
+const safeFetch = async (url, options = {}) => {
+  try {
+    return await fetch(url, options);
+  } catch (error) {
+    console.log(error);
+    return false;
+  }
+};
+
 async function transfer(amount, to, nonce, epoch) {
   const data = [
     nonce, // nonce
@@ -21,7 +36,12 @@ async function transfer(amount, to, nonce, epoch) {
     '0x', // payload (can be null too)
   ];
 
+  console.log({ data });
+
   const rlpData = await RLP.encode(data);
+
+  console.log({ rlpData });
+
   const hash = await ethers.utils.keccak256(rlpData);
 
   var key = new SigningKey(privateKey);
@@ -39,11 +59,12 @@ async function transfer(amount, to, nonce, epoch) {
 
   return await rlpResult.toString('hex');
 }
+
 async function getcount() {
   var path = 'https://api.idena.org/api/Address/' + address + '/Txs/Count';
-  const requestPromise = util.promisify(request);
-  const response = await requestPromise(path);
-  return response.body;
+  const response = await safeFetch(path);
+  const json = await response.json();
+  return json.result;
 }
 
 async function gettxs(skip, limit) {
@@ -54,47 +75,65 @@ async function gettxs(skip, limit) {
     skip +
     '&limit=' +
     limit;
-  const requestPromise = util.promisify(request);
-  const response = await requestPromise(path);
-  return response.body;
+  const response = await safeFetch(path);
+  const json = await response.json();
+  return json.result;
 }
 
 async function refund() {
-  var countjson = await getcount();
-  var parsedcountjson = JSON.parse(countjson);
-  var count = parsedcountjson['result'];
+  var count = await getcount();
   var counth = count / 100;
 
   for (i = 0; i < counth; i++) {
-    let parsedtxsjson = await JSON.parse(await gettxs(i * 100, 100));
+    let txs = await gettxs(i * 100, 100);
 
-    for (var tx of parsedtxsjson['result']) {
-      if (tx['type'] == 'SendTx' && tx['amount'] > 0 && tx['to'] == address) {
+    // console.log(txs);
+
+    for (var j in txs) {
+      const tx = txs[j];
+      // console.log(tx);
+
+      if (tx.type == 'SendTx' && tx.amount > 0 && tx.to == address) {
+        // console.log(tx);
         currnonce = currnonce + 1;
+
+        const amountAdjusted = tx.amount - 0.00001;
+        console.log(amountAdjusted);
+
+        if (amountAdjusted <= 0) {
+          return;
+        }
+
+        const transferResult = await transfer(
+          amountAdjusted,
+          tx.from,
+          currnonce,
+          epoch
+        );
+
+        console.log({ transferResult });
 
         var options = {
           uri: 'https://rpc.idena.dev',
           method: 'POST',
-          json: {
+          body: JSON.stringify({
             method: 'bcn_sendRawTx',
-            id: 2,
-            params: [
-              '0x' +
-                (await transfer(
-                  tx['amount'] - 0.00001,
-                  tx['from'],
-                  currnonce,
-                  epoch
-                )),
-            ],
-          },
+            id: i + '-' + j,
+            params: ['0x' + transferResult],
+          }),
+          headers: { 'Content-Type': 'application/json' },
         };
 
-        request(options, function (error, response, body) {
-          if (!error && response.statusCode == 200) {
-            console.log(response.body);
-          }
-        });
+        console.log(options);
+
+        const response = await safeFetch(path, options);
+        const json = await response.json();
+
+        // request(options, function (error, response, body) {
+        //   if (!error && response.statusCode == 200) {
+        //     console.log(response.body);
+        //   }
+        // });
       }
     }
   }

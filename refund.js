@@ -1,8 +1,7 @@
 // make sure the capital is capital  and nonce will be zero if the address wasn't used before ...and epoch
 var address = '0xa6A5B8BDd503401037410080C8C064F7aAbB5BF0';
 const util = require('util');
-// const request = require('request');
-const fetch = require('node-fetch');
+
 const RLP = require('rlp');
 const ethers = require('ethers');
 const { SigningKey } = require('ethers/utils/signing-key');
@@ -11,19 +10,15 @@ const privateKey =
 var currnonce = 0;
 var epoch = 42;
 
+const { safeFetch } = require('./helpers');
+const { getepoch, getnonce } = require('./rpc');
+const { getcount, gettxs } = require('./api');
+
+// getnonce();
+
 /**
- * Helper function to fetch a url
+ * Builds a signed string for a transfer
  */
-
-const safeFetch = async (url, options = {}) => {
-  try {
-    return await fetch(url, options);
-  } catch (error) {
-    console.log(error);
-    return false;
-  }
-};
-
 async function transfer(amount, to, nonce, epoch) {
   const data = [
     nonce, // nonce
@@ -36,16 +31,9 @@ async function transfer(amount, to, nonce, epoch) {
     '0x', // payload (can be null too)
   ];
 
-  console.log({ data });
-
   const rlpData = await RLP.encode(data);
-
-  console.log({ rlpData });
-
   const hash = await ethers.utils.keccak256(rlpData);
-
-  var key = new SigningKey(privateKey);
-
+  const key = new SigningKey(privateKey);
   const sig = await key.signDigest(hash);
 
   const joinedSignature = Buffer.concat([
@@ -60,45 +48,27 @@ async function transfer(amount, to, nonce, epoch) {
   return await rlpResult.toString('hex');
 }
 
-async function getcount() {
-  var path = 'https://api.idena.org/api/Address/' + address + '/Txs/Count';
-  const response = await safeFetch(path);
-  const json = await response.json();
-  return json.result;
-}
-
-async function gettxs(skip, limit) {
-  var path =
-    'https://api.idena.org/api/Address/' +
-    address +
-    '/Txs?skip=' +
-    skip +
-    '&limit=' +
-    limit;
-  const response = await safeFetch(path);
-  const json = await response.json();
-  return json.result;
-}
-
+/**
+ * Get a range of transactions
+ * Returns array of transaction objects
+ */
 async function refund() {
-  var count = await getcount();
+  var count = await getcount(address);
   var counth = count / 100;
 
   for (i = 0; i < counth; i++) {
-    let txs = await gettxs(i * 100, 100);
+    let txs = await gettxs(i * 100, 100, address);
 
-    // console.log(txs);
+    console.log(txs);
 
     for (var j in txs) {
       const tx = txs[j];
-      // console.log(tx);
 
       if (tx.type == 'SendTx' && tx.amount > 0 && tx.to == address) {
         // console.log(tx);
         currnonce = currnonce + 1;
 
         const amountAdjusted = tx.amount - 0.00001;
-        console.log(amountAdjusted);
 
         if (amountAdjusted <= 0) {
           return;
@@ -111,7 +81,9 @@ async function refund() {
           epoch
         );
 
-        console.log({ transferResult });
+        console.log({
+          transferResult,
+        });
 
         var options = {
           uri: 'https://rpc.idena.dev',
@@ -121,7 +93,9 @@ async function refund() {
             id: i + '-' + j,
             params: ['0x' + transferResult],
           }),
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+          },
         };
 
         console.log(options);
@@ -129,6 +103,7 @@ async function refund() {
         const response = await safeFetch(path, options);
         const json = await response.json();
 
+        // TODO - delete this request when safeFetch is tested and working
         // request(options, function (error, response, body) {
         //   if (!error && response.statusCode == 200) {
         //     console.log(response.body);
@@ -138,4 +113,5 @@ async function refund() {
     }
   }
 }
+
 refund();
